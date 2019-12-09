@@ -196,7 +196,6 @@ stripped_affix = set([
     'menestyselokuva',
     'merimaaliohjus',
     'merkkinen',
-    'mestaruuskilpailu',
     'metalliyhtye',
     'metalyhtye',
     'miehistökapseli',

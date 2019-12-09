@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
+import re
 
 try:
     from voikko import libvoikko
@@ -17,6 +18,13 @@ from affixdata import stripped_affix, not_split
 
 
 _voikko = libvoikko.Voikko('fi')
+
+
+_NOUN_CLASSES = set(['nimisana', 'etunimi'])
+
+
+# Handle "-niminen", "-merkkinen", etc. (e.g. "Aaro-niminen mies")
+_SPLIT_AFFIX_RE = re.compile(r'^([^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)(- *)((?:nimi|merkki)(?:nen|set|sen|sten|seen|stä|siä|sessä|sestä|selle|sellä|senä|seksi|seltä|sissä|sistä|siin|sillä|sinä|siltä|sille|siksi) [^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)$')
 
 
 def _possible_splits(text):
@@ -36,25 +44,50 @@ def _possible_splits(text):
         start = h_start + 1
 
 
+def unique(iterable):
+    uniq, seen = [], set()
+    for i in iterable:
+        if i not in seen:
+            uniq.append(i)
+            seen.add(i)
+    return uniq
+
+
 def _normalize_affix(affix):
     affix = affix.strip()
     lemmas = []
     for word in affix.split():
-        forms = _voikko.analyze(word)
-        if not forms:
-            warning('failed to analyze: "{}"'.format(word))
+        if not any(c.isalpha() for c in word):
+            lemmas.append(word)    # no change for non-alpha
+            continue
+        analyses = _voikko.analyze(word)
+        if not analyses:
+            if not word[0].isupper():    # no warning for likely proper nouns
+                info('failed to analyze: "{}"'.format(word))
             lemmas.append(word)
         else:
-            if len(forms) > 1:
-                forms = [f for f in forms if f['CLASS'] == 'nimisana']
-            if len(forms) > 1:
-                warning('multiple forms for "{}": {}'.format(word, forms))
-            lemmas.append(forms[0]['BASEFORM'])
+            noun_analyses = [a for a in analyses if a['CLASS'] in _NOUN_CLASSES]
+            if noun_analyses:
+                analyses = noun_analyses    # prioritize noun readings
+            baseforms = unique([a['BASEFORM'] for a in analyses])
+            case_preserving = [
+                b for b in baseforms if b[0].isupper() == word[0].isupper()
+            ]
+            if case_preserving:
+                baseforms = case_preserving    # prioritize case-preserving
+            if len(baseforms) > 1:
+                info('multiple lemmas for "{}": {}'.format(word, baseforms))
+            lemmas.append(baseforms[0])
     info('_normalize_affix({}) = {}'.format(affix, ' '.join(lemmas)))
     return ' '.join(lemmas)
 
 
 def strip_affix(string):
+    m = _SPLIT_AFFIX_RE.match(string)
+    if m:
+        text, hyphen, affix = m.groups()
+        assert text + hyphen + affix == string
+        return text
     for text, hyphen, affix in _possible_splits(string):
         assert text + hyphen + affix == string
         affix = _normalize_affix(affix)
