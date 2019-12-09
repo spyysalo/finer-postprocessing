@@ -27,6 +27,19 @@ _NOUN_CLASSES = set(['nimisana', 'etunimi'])
 _SPLIT_AFFIX_RE = re.compile(r'^([^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)(- *)((?:nimi|merkki)(?:nen|set|sen|sten|seen|stä|siä|sessä|sestä|selle|sellä|senä|seksi|seltä|sissä|sistä|siin|sillä|sinä|siltä|sille|siksi) [^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)$')
 
 
+def argparser():
+    from argparse import ArgumentParser
+    ap = ArgumentParser()
+    ap.add_argument('--standoff', default=False, action='store_true',
+                    help='input is standoff (default: text)')
+    ap.add_argument('--keep-quotes', default=False, action='store_true',
+                    help='do not strip quotes')
+    ap.add_argument('--changed-only', default=False, action='store_true',
+                    help='only output changed strings')
+    ap.add_argument('file', nargs='+')
+    return ap
+
+
 def _possible_splits(text):
     start = 1
     while start < len(text) and not text[start].isalpha():
@@ -69,15 +82,18 @@ def _normalize_affix(affix):
             noun_analyses = [a for a in analyses if a['CLASS'] in _NOUN_CLASSES]
             if noun_analyses:
                 analyses = noun_analyses    # prioritize noun readings
-            baseforms = unique([a['BASEFORM'] for a in analyses])
+            base_forms = unique([a['BASEFORM'] for a in analyses])
             case_preserving = [
-                b for b in baseforms if b[0].isupper() == word[0].isupper()
+                b for b in base_forms if b[0].isupper() == word[0].isupper()
             ]
-            if case_preserving:
-                baseforms = case_preserving    # prioritize case-preserving
-            if len(baseforms) > 1:
-                info('multiple lemmas for "{}": {}'.format(word, baseforms))
-            lemmas.append(baseforms[0])
+            if not case_preserving:    # require case-preserving
+                info('no case-preserving: {} ({})'.format(word, base_forms))
+                lemmas.append(word)
+            else:
+                if len(case_preserving) > 1:
+                    info('multiple lemmas for {}: {}'.format(
+                        word, case_preserving))
+                lemmas.append(case_preserving[0])
     info('_normalize_affix({}) = {}'.format(affix, ' '.join(lemmas)))
     return ' '.join(lemmas)
 
@@ -99,21 +115,53 @@ def strip_affix(string):
 
 
 def remove_quotes(string):
-    return string.strip('" ')
+    return string.strip(' "\'“”‘’')
 
 
-def process(fn):
+def process_text(fn, options):
     with open(fn) as f:
         for ln, l in enumerate(f, start=1):
             l = l.rstrip('\n')
             s = strip_affix(l)
-            s = remove_quotes(s)
-            print('{}\t->\t{}'.format(l, s))
+            if not options.keep_quotes:
+                s = remove_quotes(s)
+            if l != s or not options.changed_only:
+                print('{}\t->\t{}'.format(l, s))
+
+
+def process_standoff(fn, options):
+    with open(fn) as f:
+        for ln, l in enumerate(f, start=1):
+            l = l.rstrip('\n')
+            if l.isspace() or not l:
+                if not options.changed_only:
+                    print(l)
+            elif l[0] != 'T':
+                if not options.changed_only:
+                    print(l)    # only process textbounds
+            else:
+                id_, type_and_span, text = l.split('\t')
+                type_, start, end = type_and_span.split(' ')
+                start, end = int(start), int(end)
+                stext = strip_affix(text)
+                if not options.keep_quotes:
+                    stext = remove_quotes(stext)
+                offset = text.find(stext)
+                assert offset != -1
+                start += offset
+                end = start + len(stext)
+                if stext != text or not options.changed_only:
+                    print('{}\t{} {} {}\t{}'.format(
+                        id_, type_, start, end, stext))
 
 
 def main(argv):
-    for fn in argv[1:]:
-        process(fn)
+    args = argparser().parse_args(argv[1:])
+    for fn in args.file:
+        if args.standoff:
+            process_standoff(fn, args)
+        else:
+            process_text(fn, args)
 
 
 if __name__ == '__main__':
