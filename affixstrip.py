@@ -20,8 +20,21 @@ from affixdata import stripped_affix, not_split
 _voikko = libvoikko.Voikko('fi')
 
 
+_HYPHENS = set(['-', '–'])
+
 _NOUN_CLASSES = set(['nimisana', 'etunimi'])
 
+_UNLIKELY_LEMMAS = set([
+    'karsi',
+    'koni',
+    'lentokoni',
+    'kotitietokoni',
+    'minitietokoni',
+    'supertietokoni',
+    'taulutietokoni',
+    'tietokoni',
+    'sivuilta'
+])
 
 # Handle "-niminen", "-merkkinen", etc. (e.g. "Aaro-niminen mies")
 _SPLIT_AFFIX_RE = re.compile(r'^([^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)(- *)((?:nimi|merkki)(?:nen|set|sen|sten|seen|stä|siä|sessä|sestä|selle|sellä|senä|seksi|seltä|sissä|sistä|siin|sillä|sinä|siltä|sille|siksi) [^a-zA-ZäöÄÖ]*[a-zA-ZäöÄÖ].*)$')
@@ -40,16 +53,24 @@ def argparser():
     return ap
 
 
+def find_chars(text, chars, start):
+    firsts = [text.find(c, start) for c in chars]
+    if not any(i != -1 for i in firsts):
+        return -1    # none found
+    else:
+        return min(i for i in firsts if i != -1)
+
+
 def _possible_splits(text):
-    start = 1
+    start = 0
     while start < len(text) and not text[start].isalpha():
         start += 1    # don't split before first alpha
     while start < len(text):
-        h_start = text.find('-', start)
+        h_start = find_chars(text, _HYPHENS, start)
         if h_start == -1:
             break
         h_end = h_start+1
-        while h_end < len(text) and not text[h_end].isalpha():
+        while h_end < len(text) and not text[h_end].isalnum():
             h_end += 1
         if h_end == len(text):
             break    # don't split after last alpha
@@ -64,6 +85,11 @@ def unique(iterable):
             uniq.append(i)
             seen.add(i)
     return uniq
+
+
+def filter_lemmas(lemmas):
+    # take out some unlikely cases
+    return [l for l in lemmas if l not in _UNLIKELY_LEMMAS]
 
 
 def _normalize_affix(affix):
@@ -86,6 +112,7 @@ def _normalize_affix(affix):
             case_preserving = [
                 b for b in base_forms if b[0].isupper() == word[0].isupper()
             ]
+            case_preserving = filter_lemmas(case_preserving)
             if not case_preserving:    # require case-preserving
                 info('no case-preserving: {} ({})'.format(word, base_forms))
                 lemmas.append(word)
@@ -115,16 +142,23 @@ def strip_affix(string):
 
 
 def remove_quotes(string):
-    return string.strip(' "\'“”‘’')
+    return string.strip(' "\'“”‘’`')
+
+
+def process_string(s, options):
+    if not options.keep_quotes:
+        s = remove_quotes(s)
+    s = strip_affix(s)
+    if not options.keep_quotes:
+        s = remove_quotes(s)
+    return s
 
 
 def process_text(fn, options):
     with open(fn) as f:
         for ln, l in enumerate(f, start=1):
             l = l.rstrip('\n')
-            s = strip_affix(l)
-            if not options.keep_quotes:
-                s = remove_quotes(s)
+            s = process_string(l, options)
             if l != s or not options.changed_only:
                 print('{}\t->\t{}'.format(l, s))
 
@@ -143,9 +177,7 @@ def process_standoff(fn, options):
                 id_, type_and_span, text = l.split('\t')
                 type_, start, end = type_and_span.split(' ')
                 start, end = int(start), int(end)
-                stext = strip_affix(text)
-                if not options.keep_quotes:
-                    stext = remove_quotes(stext)
+                stext = process_string(text, options)
                 offset = text.find(stext)
                 assert offset != -1
                 start += offset
